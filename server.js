@@ -38,9 +38,13 @@ app.use(cookieParser());
 app.use(cors());
 app.use(morgan("tiny"));
 
+app.get("/", (req, res) => res.send("Hello World"));
+
 const userRoutes = require("./src/routes/index");
 app.use(userRoutes);
 
 server.listen(port, () => {
   handlers.logger.success({ message: `POC is live at ${baseUrl}` });
 });
+
+module.exports = app;

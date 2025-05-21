@@ -1,19 +1,13 @@
 const { handlers } = require("../utilities/handlers/handlers");
 const { docClient, s3 } = require("../config/dynamodb");
 const { v4: uuidv4 } = require("uuid");
-const fs = require("fs");
-const {
-  generateAndUploadThumbnailFromS3Url
-} = require("../utilities/generators/thumbnail-generator");
 const path = require("path");
 
 class RoomService {
   constructor() {
     this.tableName = "InventoryManagement";
-    this.s3VideoBucket = "uploads-476114132237";
-    this.s3ThumbnailBucket = "thumbnails-476114132237";
     this.userPK = "USER#123";
-    this.elyssePocVideo = "elysse-poc-video";
+    this.elyssePocMedia = "elysse-poc-media";
   }
 
   async validateProject(projectId, res) {
@@ -66,8 +60,89 @@ class RoomService {
     return true;
   }
 
+  // async uploadVideoToS3(req, res) {
+  //   const file = req.files?.videos?.[0];
+
+  //   handlers.logger.success({
+  //     message: "Received upload request",
+  //     hasFile: !!file
+  //   });
+
+  //   if (!file) {
+  //     handlers.logger.failed({ message: "No video file provided" });
+  //     return handlers.response.failed({
+  //       res,
+  //       message: "No video file provided"
+  //     });
+  //   }
+
+  //   const jobId = uuidv4();
+  //   const originalFileName = path.basename(file.originalname || "video.mp4");
+  //   const uniqueFileKey = `input/${jobId}-${originalFileName.replace(/\s+/g, "_")}`;
+
+  //   handlers.logger.success({
+  //     message: "Preparing upload to S3",
+  //     data: {
+  //       jobId,
+  //       originalFileName,
+  //       uniqueFileKey,
+  //       mimeType: file.mimetype,
+  //       bucket: this.elyssePocMedia
+  //     }
+  //   });
+
+  //   const params = {
+  //     Bucket: this.elyssePocMedia,
+  //     Key: uniqueFileKey,
+  //     Body: file.buffer, // <-- No file system access, use buffer
+  //     ContentType: file.mimetype,
+  //     ACL: "public-read"
+  //   };
+
+  //   try {
+  //     handlers.logger.success({ message: "Starting upload to S3..." });
+
+  //     const uploadResult = await s3.upload(params).promise();
+
+  //     handlers.logger.success({
+  //       message: "Upload completed",
+  //       data: {
+  //         location: uploadResult.Location,
+  //         key: uniqueFileKey
+  //       }
+  //     });
+
+  //     return handlers.response.success({
+  //       res,
+  //       message: "Video uploaded successfully",
+  //       data: {
+  //         url: uploadResult.Location,
+  //         jobId,
+  //         key: uniqueFileKey
+  //       }
+  //     });
+  //   } catch (err) {
+  //     console.error({ err });
+
+  //     handlers.logger.error({
+  //       message: "Failed to upload video to S3",
+  //       error: err
+  //     });
+
+  //     return handlers.response.error({
+  //       res,
+  //       message: "Failed to upload video to S3"
+  //     });
+  //   }
+  // }
+
   async uploadVideoToS3(req, res) {
     const file = req.files?.videos?.[0];
+
+    handlers.logger.success({
+      message: "Received upload request",
+      hasFile: !!file
+    });
 
     if (!file) {
       handlers.logger.failed({ message: "No video file provided" });
@@ -81,30 +156,82 @@ class RoomService {
     const originalFileName = path.basename(file.originalname || "video.mp4");
     const uniqueFileKey = `input/${jobId}-${originalFileName.replace(/\s+/g, "_")}`;
 
-    const localFilePath = file.path;
+    handlers.logger.success({
+      message: "Preparing multipart upload to S3",
+      data: {
+        jobId,
+        originalFileName,
+        uniqueFileKey,
+        mimeType: file.mimetype,
+        bucket: this.elyssePocMedia
+      }
+    });
 
-    const params = {
-      Bucket: this.elyssePocVideo,
-      Key: uniqueFileKey,
-      Body: fs.createReadStream(localFilePath),
-      ContentType: file.mimetype,
-      PartSize: 5 * 1024 * 1024,
-      QueueSize: 20,
-      ACL: "public-read"
-    };
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB per part (minimum allowed by S3 except last part)
+    const buffer = file.buffer;
+    const totalParts = Math.ceil(buffer.length / CHUNK_SIZE);
 
     try {
-      const uploadResult = await s3.upload(params).promise();
+      // 1. Create multipart upload
+      const multipart = await s3
+        .createMultipartUpload({
+          Bucket: this.elyssePocMedia,
+          Key: uniqueFileKey,
+          ContentType: file.mimetype,
+          ACL: "public-read"
+        })
+        .promise();
 
-      fs.unlink(localFilePath, (err) => {
-        if (err) console.error("Failed to delete local file:", err);
+      const uploadId = multipart.UploadId;
+      handlers.logger.success({
+        message: `Multipart upload started with UploadId: ${uploadId}`
       });
 
+      // 2. Upload parts in parallel (or sequentially)
+      const uploadPartPromises = [];
+
+      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+        const start = (partNumber - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, buffer.length);
+
+        const partParams = {
+          Bucket: this.elyssePocMedia,
+          Key: uniqueFileKey,
+          PartNumber: partNumber,
+          UploadId: uploadId,
+          Body: buffer.slice(start, end)
+        };
+
+        uploadPartPromises.push(s3.uploadPart(partParams).promise());
+      }
+
+      // Wait for all parts to upload
+      const uploadedParts = await Promise.all(uploadPartPromises);
+
+      // Prepare parts info for completing upload
+      const parts = uploadedParts.map((part, index) => ({
+        ETag: part.ETag,
+        PartNumber: index + 1
+      }));
+
+      // 3. Complete multipart upload
+      const completeParams = {
+        Bucket: this.elyssePocMedia,
+        Key: uniqueFileKey,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: parts
+        }
+      };
+
+      const completeResult = await s3
+        .completeMultipartUpload(completeParams)
+        .promise();
+
       handlers.logger.success({
-        message: "Video uploaded successfully",
+        message: "Multipart upload completed",
         data: {
-          url: uploadResult.Location,
-          jobId,
+          location: completeResult.Location,
           key: uniqueFileKey
         }
       });
@@ -113,14 +240,33 @@ class RoomService {
         res,
         message: "Video uploaded successfully",
         data: {
-          url: uploadResult.Location,
+          url: completeResult.Location,
           jobId,
           key: uniqueFileKey
         }
       });
     } catch (err) {
-      fs.unlink(localFilePath, () => {});
-      handlers.logger.error({ message: err });
+      console.error({ err });
+
+      // Abort multipart upload if failed
+      if (uploadId) {
+        await s3
+          .abortMultipartUpload({
+            Bucket: this.elyssePocMedia,
+            Key: uniqueFileKey,
+            UploadId: uploadId
+          })
+          .promise();
+        handlers.logger.error({
+          message: "Aborted multipart upload due to failure"
+        });
+      }
+
+      handlers.logger.error({
+        message: "Failed to upload video to S3",
+        error: err
+      });
+
       return handlers.response.error({
         res,
         message: "Failed to upload video to S3"
@@ -129,28 +275,41 @@ class RoomService {
   }
 
   async createRoom(req, res) {
-    const { projectId, name, description, videoUrl, jobId } = req.body;
+    const { projectId, name, description, videoUrl, jobId, thumbnail } =
+      req.body;
+
+    handlers.logger.success({
+      message: "Received request to create room",
+      data: { projectId, name, videoUrl, jobId }
+    });
 
     if (!projectId || !videoUrl || !jobId) {
+      const missingField = !projectId
+        ? "Project ID"
+        : !videoUrl
+          ? "Video URL"
+          : "Job ID";
+
       handlers.logger.failed({
-        message: !projectId ? "Project ID is required" : "Video URL is required"
+        message: `${missingField} is required`
       });
+
       return handlers.response.failed({
         res,
-        message: !projectId ? "Project ID is required" : "Video URL is required"
+        message: `${missingField} is required`
       });
     }
 
-    if (!(await this.validateProject(projectId, res))) return;
+    if (!(await this.validateProject(projectId, res))) {
+      handlers.logger.failed({
+        message: `Project validation failed for projectId: ${projectId}`
+      });
+      return;
+    }
 
     try {
       const roomId = uuidv4();
       const createdAt = new Date().toISOString();
-
-      const thumbnail = await generateAndUploadThumbnailFromS3Url(
-        videoUrl,
-        this.s3ThumbnailBucket
-      );
 
       const roomItem = {
         PK: this.userPK,
@@ -167,6 +326,11 @@ class RoomService {
         JobId: jobId,
         CreatedAt: createdAt
       };
+
+      handlers.logger.success({
+        message: "Saving room item to DynamoDB",
+        data: { roomId, table: this.tableName }
+      });
 
       await docClient
         .put({
@@ -186,8 +350,15 @@ class RoomService {
         data: roomItem
       });
     } catch (error) {
-      handlers.logger.error({ message: error });
-      return handlers.response.error({ res, message: "Failed to create room" });
+      handlers.logger.error({
+        message: "Error occurred while creating room",
+        error: error.message || error
+      });
+
+      return handlers.response.error({
+        res,
+        message: "Failed to create room"
+      });
     }
   }
 
@@ -238,7 +409,7 @@ class RoomService {
 
       // Job flow
       const jobId = room.JobId;
-      const bucket = this.elyssePocVideo;
+      const bucket = this.elyssePocMedia;
       const outputPrefix = `output/${jobId}/`;
 
       const getFileContent = async (key) => {
@@ -279,7 +450,7 @@ class RoomService {
 
       const responsePayload = {
         ...room,
-        Accessories
+        Accessories: room.Accessories || Accessories
       };
 
       handlers.logger.success({
@@ -354,7 +525,7 @@ class RoomService {
         }
       };
 
-      const bucket = this.elyssePocVideo;
+      const bucket = this.elyssePocMedia;
 
       // For each room, attach Accessories if JobId exists
       const enrichedRooms = await Promise.all(
@@ -386,7 +557,7 @@ class RoomService {
 
           return {
             ...room,
-            Accessories
+            Accessories: room.Accessories || Accessories
           };
         })
       );
