@@ -3,8 +3,8 @@ class Controller {
     this.service = require("../services/room-service");
   }
 
-  async uploadVideoToS3(req, res) {
-    await this.service.uploadVideoToS3(req, res);
+  async getPresignedUploadUrl(req, res) {
+    await this.service.getPresignedUploadUrl(req, res);
   }
 
   async createRoom(req, res) {

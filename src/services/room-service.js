@@ -60,216 +60,57 @@ class RoomService {
     return true;
   }
 
-  // async uploadVideoToS3(req, res) {
-  //   const file = req.files?.videos?.[0];
-
-  //   handlers.logger.success({
-  //     message: "Received upload request",
-  //     hasFile: !!file
-  //   });
-
-  //   if (!file) {
-  //     handlers.logger.failed({ message: "No video file provided" });
-  //     return handlers.response.failed({
-  //       res,
-  //       message: "No video file provided"
-  //     });
-  //   }
-
-  //   const jobId = uuidv4();
-  //   const originalFileName = path.basename(file.originalname || "video.mp4");
-  //   const uniqueFileKey = `input/${jobId}-${originalFileName.replace(/\s+/g, "_")}`;
-
-  //   handlers.logger.success({
-  //     message: "Preparing upload to S3",
-  //     data: {
-  //       jobId,
-  //       originalFileName,
-  //       uniqueFileKey,
-  //       mimeType: file.mimetype,
-  //       bucket: this.elyssePocMedia
-  //     }
-  //   });
-
-  //   const params = {
-  //     Bucket: this.elyssePocMedia,
-  //     Key: uniqueFileKey,
-  //     Body: file.buffer, // <-- No file system access, use buffer
-  //     ContentType: file.mimetype,
-  //     ACL: "public-read"
-  //   };
-
-  //   try {
-  //     handlers.logger.success({ message: "Starting upload to S3..." });
-
-  //     const uploadResult = await s3.upload(params).promise();
-
-  //     handlers.logger.success({
-  //       message: "Upload completed",
-  //       data: {
-  //         location: uploadResult.Location,
-  //         key: uniqueFileKey
-  //       }
-  //     });
-
-  //     return handlers.response.success({
-  //       res,
-  //       message: "Video uploaded successfully",
-  //       data: {
-  //         url: uploadResult.Location,
-  //         jobId,
-  //         key: uniqueFileKey
-  //       }
-  //     });
-  //   } catch (err) {
-  //     console.error({ err });
-
-  //     handlers.logger.error({
-  //       message: "Failed to upload video to S3",
-  //       error: err
-  //     });
-
-  //     return handlers.response.error({
-  //       res,
-  //       message: "Failed to upload video to S3"
-  //     });
-  //   }
-  // }
-
-  async uploadVideoToS3(req, res) {
-    const file = req.files?.videos?.[0];
+  async getPresignedUploadUrl(req, res) {
+    const { key, fileType } = req.body;
 
     handlers.logger.success({
-      message: "Received upload request",
-      hasFile: !!file
+      message: "Received request to generate pre-signed URL",
+      data: { key, fileType }
     });
 
-    if (!file) {
-      handlers.logger.failed({ message: "No video file provided" });
+    if (!key || !fileType) {
+      handlers.logger.failed({
+        message: "Missing key or fileType in request body"
+      });
       return handlers.response.failed({
         res,
-        message: "No video file provided"
+        message: "Missing key or fileType"
       });
     }
 
-    const jobId = uuidv4();
-    const originalFileName = path.basename(file.originalname || "video.mp4");
-    const uniqueFileKey = `input/${jobId}-${originalFileName.replace(/\s+/g, "_")}`;
-
-    handlers.logger.success({
-      message: "Preparing multipart upload to S3",
-      data: {
-        jobId,
-        originalFileName,
-        uniqueFileKey,
-        mimeType: file.mimetype,
-        bucket: this.elyssePocMedia
-      }
-    });
-
-    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB per part (minimum allowed by S3 except last part)
-    const buffer = file.buffer;
-    const totalParts = Math.ceil(buffer.length / CHUNK_SIZE);
-
     try {
-      // 1. Create multipart upload
-      const multipart = await s3
-        .createMultipartUpload({
-          Bucket: this.elyssePocMedia,
-          Key: uniqueFileKey,
-          ContentType: file.mimetype,
-          ACL: "public-read"
-        })
-        .promise();
-
-      const uploadId = multipart.UploadId;
-      handlers.logger.success({
-        message: `Multipart upload started with UploadId: ${uploadId}`
-      });
-
-      // 2. Upload parts in parallel (or sequentially)
-      const uploadPartPromises = [];
-
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        const start = (partNumber - 1) * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, buffer.length);
-
-        const partParams = {
-          Bucket: this.elyssePocMedia,
-          Key: uniqueFileKey,
-          PartNumber: partNumber,
-          UploadId: uploadId,
-          Body: buffer.slice(start, end)
-        };
-
-        uploadPartPromises.push(s3.uploadPart(partParams).promise());
-      }
-
-      // Wait for all parts to upload
-      const uploadedParts = await Promise.all(uploadPartPromises);
-
-      // Prepare parts info for completing upload
-      const parts = uploadedParts.map((part, index) => ({
-        ETag: part.ETag,
-        PartNumber: index + 1
-      }));
-
-      // 3. Complete multipart upload
-      const completeParams = {
+      const params = {
         Bucket: this.elyssePocMedia,
-        Key: uniqueFileKey,
-        UploadId: uploadId,
-        MultipartUpload: {
-          Parts: parts
-        }
+        Key: key,
+        Expires: 300, // 5 minutes
+        ContentType: fileType,
+        ACL: "public-read"
       };
 
-      const completeResult = await s3
-        .completeMultipartUpload(completeParams)
-        .promise();
+      const presignedUrl = await s3.getSignedUrlPromise("putObject", params);
 
       handlers.logger.success({
-        message: "Multipart upload completed",
-        data: {
-          location: completeResult.Location,
-          key: uniqueFileKey
-        }
+        message: "Pre-signed URL generated",
+        data: { presignedUrl }
       });
 
       return handlers.response.success({
         res,
-        message: "Video uploaded successfully",
+        message: "Pre-signed URL generated successfully",
         data: {
-          url: completeResult.Location,
-          jobId,
-          key: uniqueFileKey
+          url: presignedUrl,
+          key
         }
       });
     } catch (err) {
-      console.error({ err });
-
-      // Abort multipart upload if failed
-      if (uploadId) {
-        await s3
-          .abortMultipartUpload({
-            Bucket: this.elyssePocMedia,
-            Key: uniqueFileKey,
-            UploadId: uploadId
-          })
-          .promise();
-        handlers.logger.error({
-          message: "Aborted multipart upload due to failure"
-        });
-      }
-
       handlers.logger.error({
-        message: "Failed to upload video to S3",
+        message: "Failed to generate pre-signed URL",
         error: err
       });
 
       return handlers.response.error({
         res,
-        message: "Failed to upload video to S3"
+        message: "Failed to generate pre-signed URL"
       });
     }
   }

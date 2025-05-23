@@ -6,7 +6,7 @@ const upload = require("../middlewares/multer-middleware");
 router.post(
   "/rooms/uploads",
   upload.fields([{ name: "videos" }]),
-  roomController.uploadVideoToS3.bind(roomController)
+  roomController.getPresignedUploadUrl.bind(roomController)
 );
 
 router.post("/rooms", roomController.createRoom.bind(roomController));
