@@ -1,7 +1,11 @@
 const ExcelJS = require("exceljs");
-const nodemailer = require("nodemailer");
+const MailComposer = require("nodemailer/lib/mail-composer");
+const { SESClient, SendRawEmailCommand } = require("@aws-sdk/client-ses");
+
 const { handlers } = require("../utilities/handlers/handlers");
 const { docClient, s3 } = require("../config/dynamodb");
+
+const ses = new SESClient(); // Uses Lambda's IAM role
 
 class Service {
   constructor() {
@@ -22,12 +26,10 @@ class Service {
       SK: `PROJECT#${projectId}`
     };
 
-    const project = await docClient
-      .get({ TableName: this.tableName, Key: projectKey })
-      .promise();
+    const project = await docClient.get({ TableName: this.tableName, Key: projectKey }).promise();
 
     if (!project.Item) {
-      handlers.logger.failed({ message: "Project ID is required" });
+      handlers.logger.failed({ message: "Invalid project ID" });
       handlers.response.failed({ res, message: "Invalid project ID" });
       return false;
     }
@@ -37,18 +39,14 @@ class Service {
 
   async generateAndEmailExcel({ enrichedRooms, email }) {
     try {
-      handlers.logger.success({
-        message: `Generating Excel for ${enrichedRooms.length} rooms`
-      });
+      handlers.logger.success({ message: `Generating Excel for ${enrichedRooms.length} rooms` });
 
-      enrichedRooms.sort(
-        (a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt)
-      );
+      enrichedRooms.sort((a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt));
 
       const workbook = new ExcelJS.Workbook();
 
       enrichedRooms.forEach((room) => {
-        const sheetName = `Room ${room.RoomId}` || "Unnamed Room";
+        const sheetName = `Room ${room.RoomId}`.substring(0, 31) || "Unnamed Room";
         const sheet = workbook.addWorksheet(sheetName);
 
         sheet.columns = [
@@ -71,42 +69,32 @@ class Service {
 
       const buffer = await workbook.xlsx.writeBuffer();
 
-      handlers.logger.success({
-        message: "Excel file generated, preparing to send email"
-      });
+      handlers.logger.success({ message: "Excel file generated, preparing to send email" });
 
-      const transporter = nodemailer.createTransport({
-        host: "email-smtp.us-east-1.amazonaws.com",
-        port: 587,
-        secure: false,
-        auth: {
-          user: "AKIAWVYDXY45EALOR4FQ",
-          pass: "BKjPE3kujw6mkCHKFsTCxtTM0xNQbNzk4YF19L2uW6fC"
-        }
-      });
-
-      await transporter.sendMail({
-        from: "Elysse@cluedotech.com",
+      const mail = new MailComposer({
+        from: "Elysse@cluedotech.com", // Must be SES verified
         to: email,
         subject: "Room Data Export",
         text: "Attached is the Excel file containing room data.",
         attachments: [
           {
             filename: "room-data.xlsx",
-            content: buffer
+            content: buffer,
+            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           }
         ]
       });
 
-      handlers.logger.success({
-        message: `Email sent successfully to ${email}`
+      const rawMessage = await new Promise((resolve, reject) => {
+        mail.compile().build((err, message) => (err ? reject(err) : resolve(message)));
       });
+
+      await ses.send(new SendRawEmailCommand({ RawMessage: { Data: rawMessage } }));
+
+      handlers.logger.success({ message: `Email sent successfully to ${email}` });
     } catch (error) {
-      handlers.logger.error({
-        message: "Error in generateAndEmailExcel",
-        error
-      });
-      throw error; // Propagate error to caller for proper handling
+      handlers.logger.error({ message: "Error in generateAndEmailExcel", error });
+      throw error;
     }
   }
 
@@ -115,32 +103,27 @@ class Service {
 
     if (!projectId) {
       handlers.logger.error({ message: "Project ID is required" });
-      return handlers.response.error({
-        res,
-        message: "Project ID is required"
-      });
+      return handlers.response.error({ res, message: "Project ID is required" });
     }
 
     try {
       if (!(await this.validateProject(projectId, res))) return;
 
       let fetchedItems = [];
-      let nextKey = undefined;
+      let nextKey;
 
       do {
-        const result = await docClient
-          .query({
-            TableName: this.tableName,
-            KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-            FilterExpression: "EntityType = :entityType",
-            ExpressionAttributeValues: {
-              ":pk": this.userPK,
-              ":skPrefix": `PROJECT#${projectId}#ROOM#`,
-              ":entityType": "Room"
-            },
-            ExclusiveStartKey: nextKey
-          })
-          .promise();
+        const result = await docClient.query({
+          TableName: this.tableName,
+          KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+          FilterExpression: "EntityType = :entityType",
+          ExpressionAttributeValues: {
+            ":pk": this.userPK,
+            ":skPrefix": `PROJECT#${projectId}#ROOM#`,
+            ":entityType": "Room"
+          },
+          ExclusiveStartKey: nextKey
+        }).promise();
 
         fetchedItems = [...fetchedItems, ...result.Items];
         nextKey = result.LastEvaluatedKey;
@@ -151,17 +134,13 @@ class Service {
         return handlers.response.success({ res, message: "No rooms yet" });
       }
 
-      const bucket = this.elyssePocMedia;
-
-      const getFileContent = async (bucket, outputPrefix, key) => {
+      const getFileContent = async (bucket, prefix, key) => {
         try {
-          const data = await s3
-            .getObject({ Bucket: bucket, Key: `${outputPrefix}${key}` })
-            .promise();
+          const data = await s3.getObject({ Bucket: bucket, Key: `${prefix}${key}` }).promise();
           return data.Body.toString("utf-8").trim();
         } catch (err) {
           handlers.logger.success({
-            message: `Failed to get file content: ${outputPrefix}${key}`,
+            message: `Failed to get file content: ${prefix}${key}`,
             error: err
           });
           return null;
@@ -172,11 +151,10 @@ class Service {
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
 
-          const outputPrefix = `output/${room.JobId}/`;
-
+          const prefix = `output/${room.JobId}/`;
           const [errorText, resultText] = await Promise.all([
-            getFileContent(bucket, outputPrefix, "error.txt"),
-            getFileContent(bucket, outputPrefix, "result.txt")
+            getFileContent(this.elyssePocMedia, prefix, "error.txt"),
+            getFileContent(this.elyssePocMedia, prefix, "result.txt")
           ]);
 
           let Accessories = null;
@@ -195,28 +173,17 @@ class Service {
             }
           }
 
-          return {
-            ...room,
-            Accessories: room.Accessories || Accessories
-          };
+          return { ...room, Accessories: room.Accessories || Accessories };
         })
       );
 
       await this.generateAndEmailExcel({ enrichedRooms, email });
 
-      handlers.logger.success({
-        message: "Export and email process completed successfully"
-      });
-      return handlers.response.success({
-        res,
-        message: "Export and email sent successfully"
-      });
+      handlers.logger.success({ message: "Export and email process completed successfully" });
+      return handlers.response.success({ res, message: "Export and email sent successfully" });
     } catch (error) {
       handlers.logger.error({ message: error });
-      return handlers.response.error({
-        res,
-        message: "Failed to export rooms"
-      });
+      return handlers.response.error({ res, message: "Failed to export rooms" });
     }
   }
 }
