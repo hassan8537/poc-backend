@@ -4,6 +4,7 @@ const { SESClient, SendRawEmailCommand } = require("@aws-sdk/client-ses");
 
 const { handlers } = require("../utilities/handlers/handlers");
 const { docClient, s3 } = require("../config/dynamodb");
+const safeParseJSON = require("../utilities/formatters/json-formatter");
 
 const ses = new SESClient(); // Uses Lambda's IAM role
 
@@ -26,7 +27,9 @@ class Service {
       SK: `PROJECT#${projectId}`
     };
 
-    const project = await docClient.get({ TableName: this.tableName, Key: projectKey }).promise();
+    const project = await docClient
+      .get({ TableName: this.tableName, Key: projectKey })
+      .promise();
 
     if (!project.Item) {
       handlers.logger.failed({ message: "Invalid project ID" });
@@ -39,14 +42,19 @@ class Service {
 
   async generateAndEmailExcel({ enrichedRooms, email }) {
     try {
-      handlers.logger.success({ message: `Generating Excel for ${enrichedRooms.length} rooms` });
+      handlers.logger.success({
+        message: `Generating Excel for ${enrichedRooms.length} rooms`
+      });
 
-      enrichedRooms.sort((a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt));
+      enrichedRooms.sort(
+        (a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt)
+      );
 
       const workbook = new ExcelJS.Workbook();
 
       enrichedRooms.forEach((room) => {
-        const sheetName = `Room ${room.RoomId}`.substring(0, 31) || "Unnamed Room";
+        const sheetName =
+          `Room ${room.RoomId}`.substring(0, 31) || "Unnamed Room";
         const sheet = workbook.addWorksheet(sheetName);
 
         sheet.columns = [
@@ -69,7 +77,9 @@ class Service {
 
       const buffer = await workbook.xlsx.writeBuffer();
 
-      handlers.logger.success({ message: "Excel file generated, preparing to send email" });
+      handlers.logger.success({
+        message: "Excel file generated, preparing to send email"
+      });
 
       const mail = new MailComposer({
         from: "Elysse@cluedotech.com", // Must be SES verified
@@ -80,20 +90,30 @@ class Service {
           {
             filename: "room-data.xlsx",
             content: buffer,
-            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            contentType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           }
         ]
       });
 
       const rawMessage = await new Promise((resolve, reject) => {
-        mail.compile().build((err, message) => (err ? reject(err) : resolve(message)));
+        mail
+          .compile()
+          .build((err, message) => (err ? reject(err) : resolve(message)));
       });
 
-      await ses.send(new SendRawEmailCommand({ RawMessage: { Data: rawMessage } }));
+      await ses.send(
+        new SendRawEmailCommand({ RawMessage: { Data: rawMessage } })
+      );
 
-      handlers.logger.success({ message: `Email sent successfully to ${email}` });
+      handlers.logger.success({
+        message: `Email sent successfully to ${email}`
+      });
     } catch (error) {
-      handlers.logger.error({ message: "Error in generateAndEmailExcel", error });
+      handlers.logger.error({
+        message: "Error in generateAndEmailExcel",
+        error
+      });
       throw error;
     }
   }
@@ -103,7 +123,10 @@ class Service {
 
     if (!projectId) {
       handlers.logger.error({ message: "Project ID is required" });
-      return handlers.response.error({ res, message: "Project ID is required" });
+      return handlers.response.error({
+        res,
+        message: "Project ID is required"
+      });
     }
 
     try {
@@ -113,17 +136,19 @@ class Service {
       let nextKey;
 
       do {
-        const result = await docClient.query({
-          TableName: this.tableName,
-          KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
-          FilterExpression: "EntityType = :entityType",
-          ExpressionAttributeValues: {
-            ":pk": this.userPK,
-            ":skPrefix": `PROJECT#${projectId}#ROOM#`,
-            ":entityType": "Room"
-          },
-          ExclusiveStartKey: nextKey
-        }).promise();
+        const result = await docClient
+          .query({
+            TableName: this.tableName,
+            KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+            FilterExpression: "EntityType = :entityType",
+            ExpressionAttributeValues: {
+              ":pk": this.userPK,
+              ":skPrefix": `PROJECT#${projectId}#ROOM#`,
+              ":entityType": "Room"
+            },
+            ExclusiveStartKey: nextKey
+          })
+          .promise();
 
         fetchedItems = [...fetchedItems, ...result.Items];
         nextKey = result.LastEvaluatedKey;
@@ -136,7 +161,9 @@ class Service {
 
       const getFileContent = async (bucket, prefix, key) => {
         try {
-          const data = await s3.getObject({ Bucket: bucket, Key: `${prefix}${key}` }).promise();
+          const data = await s3
+            .getObject({ Bucket: bucket, Key: `${prefix}${key}` })
+            .promise();
           return data.Body.toString("utf-8").trim();
         } catch (err) {
           handlers.logger.success({
@@ -151,39 +178,51 @@ class Service {
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
 
-          const prefix = `output/${room.JobId}/`;
+          const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
+
           const [errorText, resultText] = await Promise.all([
-            getFileContent(this.elyssePocMedia, prefix, "error.txt"),
-            getFileContent(this.elyssePocMedia, prefix, "result.txt")
+            getFileContent(
+              this.elyssePocMedia,
+              outputPrefix,
+              `${room.JobId}-${room.Name}-room-video-error.txt`
+            ),
+            getFileContent(
+              this.elyssePocMedia,
+              outputPrefix,
+              `${room.JobId}-${room.Name}-room-video-result.txt`
+            )
           ]);
 
           let Accessories = null;
 
           if (errorText) {
-            try {
-              Accessories = JSON.parse(errorText);
-            } catch {
-              Accessories = { error: errorText };
-            }
+            Accessories = safeParseJSON(errorText);
           } else if (resultText) {
-            try {
-              Accessories = JSON.parse(resultText);
-            } catch {
-              Accessories = { result: resultText };
-            }
+            Accessories = safeParseJSON(resultText);
           }
 
           return { ...room, Accessories: room.Accessories || Accessories };
         })
       );
 
-      await this.generateAndEmailExcel({ enrichedRooms, email });
+      await this.generateAndEmailExcel({
+        enrichedRooms,
+        email: email
+      });
 
-      handlers.logger.success({ message: "Export and email process completed successfully" });
-      return handlers.response.success({ res, message: "Export and email sent successfully" });
+      handlers.logger.success({
+        message: "Export and email process completed successfully"
+      });
+      return handlers.response.success({
+        res,
+        message: "Export and email sent successfully"
+      });
     } catch (error) {
       handlers.logger.error({ message: error });
-      return handlers.response.error({ res, message: "Failed to export rooms" });
+      return handlers.response.error({
+        res,
+        message: "Failed to export rooms"
+      });
     }
   }
 }

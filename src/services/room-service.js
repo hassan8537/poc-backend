@@ -2,6 +2,7 @@ const { handlers } = require("../utilities/handlers/handlers");
 const { docClient, s3 } = require("../config/dynamodb");
 const { v4: uuidv4 } = require("uuid");
 const path = require("path");
+const safeParseJSON = require("../utilities/formatters/json-formatter");
 
 class RoomService {
   constructor() {
@@ -248,12 +249,8 @@ class RoomService {
         });
       }
 
-      // Job flow
-      const jobId = room.JobId;
-      const bucket = this.elyssePocMedia;
-      const outputPrefix = `output/${jobId}/`;
-
-      const getFileContent = async (key) => {
+      // Helper to get file content
+      const getFileContent = async (bucket, outputPrefix, key) => {
         try {
           const data = await s3
             .getObject({ Bucket: bucket, Key: `${outputPrefix}${key}` })
@@ -264,29 +261,32 @@ class RoomService {
         }
       };
 
+      // Job flow
+      const bucket = this.elyssePocMedia;
+
+      const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
+
       const [errorText, resultText] = await Promise.all([
-        getFileContent("error.txt"),
-        getFileContent("result.txt")
+        getFileContent(
+          bucket,
+          outputPrefix,
+          `${room.JobId}-${room.Name}-room-video-error.txt`
+        ),
+        getFileContent(
+          bucket,
+          outputPrefix,
+          `${room.JobId}-${room.Name}-room-video-result.txt`
+        )
       ]);
 
       let Accessories = null;
 
       if (errorText) {
-        try {
-          console.log({ errorText });
-
-          Accessories = JSON.parse(errorText);
-        } catch {
-          Accessories = { error: errorText };
-        }
+        Accessories = safeParseJSON(errorText);
       } else if (resultText) {
-        try {
-          console.log({ resultText });
+        console.log(resultText);
 
-          Accessories = JSON.parse(resultText);
-        } catch {
-          Accessories = { result: resultText };
-        }
+        Accessories = safeParseJSON(resultText);
       }
 
       const responsePayload = {
@@ -373,27 +373,29 @@ class RoomService {
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
 
-          const outputPrefix = `output/${room.JobId}/`;
+          const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
 
           const [errorText, resultText] = await Promise.all([
-            getFileContent(bucket, outputPrefix, "error.txt"),
-            getFileContent(bucket, outputPrefix, "result.txt")
+            getFileContent(
+              bucket,
+              outputPrefix,
+              `${room.JobId}-${room.Name}-room-video-error.txt`
+            ),
+            getFileContent(
+              bucket,
+              outputPrefix,
+              `${room.JobId}-${room.Name}-room-video-result.txt`
+            )
           ]);
 
           let Accessories = null;
 
           if (errorText) {
-            try {
-              Accessories = JSON.parse(errorText);
-            } catch {
-              Accessories = { error: errorText };
-            }
+            Accessories = safeParseJSON(errorText);
           } else if (resultText) {
-            try {
-              Accessories = JSON.parse(resultText);
-            } catch {
-              Accessories = { result: resultText };
-            }
+            console.log(resultText);
+
+            Accessories = safeParseJSON(resultText);
           }
 
           return {
