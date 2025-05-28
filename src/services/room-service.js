@@ -264,18 +264,19 @@ class RoomService {
       // Job flow
       const bucket = this.elyssePocMedia;
 
-      const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
+      const roomName = room.Name?.split?.(' ')?.join?.('_');
+      const outputPrefix = `output/${room.JobId}-${roomName}-room-video/`;
 
       const [errorText, resultText] = await Promise.all([
         getFileContent(
           bucket,
           outputPrefix,
-          `${room.JobId}-${room.Name}-room-video-error.txt`
+          `${room.JobId}-${roomName}-room-video-error.txt`
         ),
         getFileContent(
           bucket,
           outputPrefix,
-          `${room.JobId}-${room.Name}-room-video-result.txt`
+          `${room.JobId}-${roomName}-room-video-result.txt`
         )
       ]);
 
@@ -372,19 +373,19 @@ class RoomService {
       const enrichedRooms = await Promise.all(
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
-
-          const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
+          const roomName = room.Name?.split?.(' ')?.join?.('_');
+          const outputPrefix = `output/${room.JobId}-${roomName}-room-video/`;
 
           const [errorText, resultText] = await Promise.all([
             getFileContent(
               bucket,
               outputPrefix,
-              `${room.JobId}-${room.Name}-room-video-error.txt`
+              `${room.JobId}-${roomName}-room-video-error.txt`
             ),
             getFileContent(
               bucket,
               outputPrefix,
-              `${room.JobId}-${room.Name}-room-video-result.txt`
+              `${room.JobId}-${roomName}-room-video-result.txt`
             )
           ]);
 
