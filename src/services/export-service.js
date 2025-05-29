@@ -42,37 +42,46 @@ class Service {
 
   async generateAndEmailExcel({ enrichedRooms, email }) {
     try {
+      const workbook = new ExcelJS.Workbook();
+      const sheetName = `${enrichedRooms[0]?.projectName || "Project"} - Room Data`;
+      const sheet = workbook.addWorksheet(sheetName);
       handlers.logger.success({
-        message: `Generating Excel for ${enrichedRooms.length} rooms`
+        message: `Generating Excel for Project Id ${enrichedRooms[0]?.ProjectId} rooms`
       });
 
       enrichedRooms.sort(
         (a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt)
       );
 
-      const workbook = new ExcelJS.Workbook();
 
+      sheet.columns = [
+        { header: "Project Name", key: "projectName", width: 30 },
+        { header: "Room Name", key: "Name", width: 50 },
+        { header: "Item Name", key: "itemName", width: 50 },
+        { header: "Quantity", key: "quantity", width: 20 },
+      ];
+   
       enrichedRooms.forEach((room) => {
-        const sheetName =
-          `Room ${room.RoomId}`.substring(0, 31) || "Unnamed Room";
-        const sheet = workbook.addWorksheet(sheetName);
+        const accessories = { ...room?.Accessories };
 
-        sheet.columns = [
-          { header: "Project ID", key: "ProjectId", width: 20 },
-          { header: "Room ID", key: "RoomId", width: 30 },
-          { header: "Name", key: "Name", width: 30 },
-          { header: "Description", key: "Description", width: 40 },
-          { header: "Video URL", key: "Video", width: 50 },
-          { header: "Thumbnail", key: "Thumbnail", width: 50 },
-          { header: "Job ID", key: "JobId", width: 30 },
-          { header: "Created At", key: "CreatedAt", width: 30 },
-          { header: "Accessories", key: "Accessories", width: 50 }
-        ];
-
-        sheet.addRow({
-          ...room,
-          Accessories: room.Accessories ? JSON.stringify(room.Accessories) : ""
-        });
+        if (accessories && Object.keys(accessories).length > 0) {
+          Object.keys(accessories).forEach((key) => {
+            sheet.addRow({
+              projectName: room.projectName,
+              Name: room.Name,
+              itemName: key,
+              quantity: accessories[key],
+            });
+          });
+        }
+        else {
+          sheet.addRow({
+            projectName: room.projectName,
+            Name: room.Name,
+            itemName: "No items yet",
+            quantity: 0,
+          });
+        }
       });
 
       const buffer = await workbook.xlsx.writeBuffer();
@@ -134,8 +143,25 @@ class Service {
 
       let fetchedItems = [];
       let nextKey;
+      let projectName = "";
 
       do {
+        // Get project details
+        const projectResult = await docClient
+          .query({
+            TableName: this.tableName,
+            KeyConditionExpression: "PK = :pk AND SK = :sk",
+            FilterExpression: "EntityType = :entityType",
+            ExpressionAttributeValues: {
+              ":pk": this.userPK,
+              ":sk": `PROJECT#${projectId}`,
+              ":entityType": "Project",
+            },
+          })
+          .promise();
+
+        projectName = projectResult.Items?.[0]?.Name || "Unknown Project";
+
         const result = await docClient
           .query({
             TableName: this.tableName,
@@ -178,19 +204,20 @@ class Service {
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
 
-          const outputPrefix = `output/${room.JobId}-${room.Name}-room-video/`;
+          const roomName = room.Name?.split?.(" ")?.join?.("_");
+          const outputPrefix = `output/${room.JobId}-${roomName}-room-video/`;
 
           const [errorText, resultText] = await Promise.all([
             getFileContent(
               this.elyssePocMedia,
               outputPrefix,
-              `${room.JobId}-${room.Name}-room-video-error.txt`
+              `${room.JobId}-${roomName}-room-video-error.txt`
             ),
             getFileContent(
               this.elyssePocMedia,
               outputPrefix,
-              `${room.JobId}-${room.Name}-room-video-result.txt`
-            )
+              `${room.JobId}-${roomName}-room-video-result.txt`
+            ),
           ]);
 
           let Accessories = null;
@@ -201,7 +228,11 @@ class Service {
             Accessories = safeParseJSON(resultText);
           }
 
-          return { ...room, Accessories: room.Accessories || Accessories };
+          return {
+            ...room,
+            Accessories: room.Accessories || Accessories,
+            projectName: projectName,
+          };
         })
       );
 
