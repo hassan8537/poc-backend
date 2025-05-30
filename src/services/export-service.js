@@ -53,14 +53,13 @@ class Service {
         (a, b) => new Date(b.CreatedAt) - new Date(a.CreatedAt)
       );
 
-
       sheet.columns = [
         { header: "Project Name", key: "projectName", width: 30 },
         { header: "Room Name", key: "Name", width: 50 },
         { header: "Item Name", key: "itemName", width: 50 },
-        { header: "Quantity", key: "quantity", width: 20 },
+        { header: "Quantity", key: "quantity", width: 20 }
       ];
-   
+
       enrichedRooms.forEach((room) => {
         const accessories = { ...room?.Accessories };
 
@@ -70,16 +69,15 @@ class Service {
               projectName: room.projectName,
               Name: room.Name,
               itemName: key,
-              quantity: accessories[key],
+              quantity: accessories[key]
             });
           });
-        }
-        else {
+        } else {
           sheet.addRow({
             projectName: room.projectName,
             Name: room.Name,
             itemName: "No items yet",
-            quantity: 0,
+            quantity: 0
           });
         }
       });
@@ -155,8 +153,8 @@ class Service {
             ExpressionAttributeValues: {
               ":pk": this.userPK,
               ":sk": `PROJECT#${projectId}`,
-              ":entityType": "Project",
-            },
+              ":entityType": "Project"
+            }
           })
           .promise();
 
@@ -217,7 +215,7 @@ class Service {
               this.elyssePocMedia,
               outputPrefix,
               `${room.JobId}-${roomName}-room-video-result.txt`
-            ),
+            )
           ]);
 
           let Accessories = null;
@@ -231,7 +229,7 @@ class Service {
           return {
             ...room,
             Accessories: room.Accessories || Accessories,
-            projectName: projectName,
+            projectName: projectName
           };
         })
       );

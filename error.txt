@@ -1,5 +1,0 @@
-{
-  "error": "Object detection failed due to low resolution",
-  "code": "LOW_RES_IMAGE",
-  "details": "Input video frames were too blurry for accurate detection."
-}

@@ -83,7 +83,7 @@ class RoomService {
       const params = {
         Bucket: this.elyssePocMedia,
         Key: key,
-        Expires: 300, // 5 minutes
+        Expires: 3600, // 1 hour
         ContentType: fileType,
         ACL: "public-read"
       };
@@ -264,7 +264,7 @@ class RoomService {
       // Job flow
       const bucket = this.elyssePocMedia;
 
-      const roomName = room.Name?.split?.(' ')?.join?.('_');
+      const roomName = room.Name?.split?.(" ")?.join?.("_");
       const outputPrefix = `output/${room.JobId}-${roomName}-room-video/`;
 
       const [errorText, resultText] = await Promise.all([
@@ -279,6 +279,8 @@ class RoomService {
           `${room.JobId}-${roomName}-room-video-result.txt`
         )
       ]);
+
+      console.log({ errorText, resultText });
 
       let Accessories = null;
 
@@ -373,7 +375,7 @@ class RoomService {
       const enrichedRooms = await Promise.all(
         fetchedItems.map(async (room) => {
           if (!room.JobId) return room;
-          const roomName = room.Name?.split?.(' ')?.join?.('_');
+          const roomName = room.Name?.split?.(" ")?.join?.("_");
           const outputPrefix = `output/${room.JobId}-${roomName}-room-video/`;
 
           const [errorText, resultText] = await Promise.all([
@@ -388,6 +390,8 @@ class RoomService {
               `${room.JobId}-${roomName}-room-video-result.txt`
             )
           ]);
+
+          console.log({ errorText, resultText });
 
           let Accessories = null;
 
