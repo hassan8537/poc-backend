@@ -66,7 +66,10 @@ class Service {
       enrichedRooms.forEach((room) => {
         const accessories = { ...room?.Accessories };
 
-        if (accessories && Object.keys(accessories).length > 0) {
+        const accessoriesAvailable = Object.keys(accessories).length > 0;
+        const accessoriesHasError = Object.keys(accessories).includes("error");
+
+        if (accessories && accessoriesAvailable && !accessoriesHasError) {
           Object.keys(accessories).forEach((key) => {
             sheet.addRow({
               projectName: room.projectName,
