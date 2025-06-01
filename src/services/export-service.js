@@ -8,6 +8,8 @@ const safeParseJSON = require("../utilities/formatters/json-formatter");
 
 const ses = new SESClient(); // Uses Lambda's IAM role
 
+const senderEmail = process.env.SENDER_EMAIL;
+
 class Service {
   constructor() {
     this.tableName = "InventoryManagement";
@@ -42,6 +44,7 @@ class Service {
 
   async generateAndEmailExcel({ enrichedRooms, email }) {
     try {
+      const receiverEmail = email?.toLowerCase()?.trim();
       const workbook = new ExcelJS.Workbook();
       const sheetName = `${enrichedRooms[0]?.projectName || "Project"} - Room Data`;
       const sheet = workbook.addWorksheet(sheetName);
@@ -88,9 +91,17 @@ class Service {
         message: "Excel file generated, preparing to send email"
       });
 
+      if (!senderEmail) {
+        throw new Error("Configure the sender email first");
+      }
+
+      if (!receiverEmail) {
+        throw new Error("Recipient email is required.");
+      }
+
       const mail = new MailComposer({
-        from: "Elysse@cluedotech.com", // Must be SES verified
-        to: email,
+        from: senderEmail, // Must be SES verified
+        to: receiverEmail,
         subject: "Room Data Export",
         text: "Attached is the Excel file containing room data.",
         attachments: [
@@ -250,7 +261,7 @@ class Service {
       handlers.logger.error({ message: error });
       return handlers.response.error({
         res,
-        message: "Failed to export rooms"
+        message: error?.message || "Failed to export rooms"
       });
     }
   }
