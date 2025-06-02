@@ -71,8 +71,9 @@ class Service {
 
         if (accessories && accessoriesAvailable && !accessoriesHasError) {
           Object.keys(accessories).forEach((key) => {
-            const count = Number(accessories[key]);
-            if (count > 0) {
+            const value = accessories[key];
+            const count = Number(value);
+            if (!isNaN(count) && count > 0) {
               sheet.addRow({
                 projectName: room.projectName,
                 Name: room.Name,
