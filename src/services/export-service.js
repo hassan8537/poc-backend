@@ -71,12 +71,13 @@ class Service {
 
         if (accessories && accessoriesAvailable && !accessoriesHasError) {
           Object.keys(accessories).forEach((key) => {
-            if(Number(accessories[key]) > 0){
+            const count = Number(accessories[key]);
+            if (count > 0) {
               sheet.addRow({
                 projectName: room.projectName,
                 Name: room.Name,
                 itemName: key,
-                quantity: accessories[key]
+                quantity: count
               });
             }
           });
