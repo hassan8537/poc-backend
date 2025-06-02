@@ -71,19 +71,14 @@ class Service {
 
         if (accessories && accessoriesAvailable && !accessoriesHasError) {
           Object.keys(accessories).forEach((key) => {
-            sheet.addRow({
-              projectName: room.projectName,
-              Name: room.Name,
-              itemName: key,
-              quantity: accessories[key]
-            });
-          });
-        } else {
-          sheet.addRow({
-            projectName: room.projectName,
-            Name: room.Name,
-            itemName: "No items yet",
-            quantity: 0
+            if(Number(accessories[key]) > 0){
+              sheet.addRow({
+                projectName: room.projectName,
+                Name: room.Name,
+                itemName: key,
+                quantity: accessories[key]
+              });
+            }
           });
         }
       });
